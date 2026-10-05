@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>UNM CS 412/512 HW4</title>
+  <style>
+    body {
+      background: #111;
+      color: #ccc;
+      font-family: monospace;
+    }
+
+    textarea {
+      background: #222;
+      color: #0f0;
+      font: 14px monospace;
+      width: 400px;
+      height: 250px;
+    }
+
+    canvas {
+      border: 1px solid #444;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Hierarchical Robot Arm</h2>
+
+  <p>
+  Use the sliders to control the joints of the robotic arm.<br>
+  Drag the mouse to rotate the view.<br>
+  Use arrow keys and W/S to move the camera.
+  </p>
+
+  <div style="display: flex; gap: 10px; align-items: flex-start;">
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div>
+        <b>Vertex Shader</b><br>
+        <textarea id="vertEditor"></textarea>
+      </div>
+      <div>
+        <b>Fragment Shader</b><br>
+        <textarea id="fragEditor"></textarea>
+      </div>
+    </div>
+    <div>
+      <canvas id="glcanvas" width="400" height="400"></canvas>
+
+
+      <br><br>
+
+      <b>Robot Arm Controls</b>
+
+      <br><br>
+
+      <label for="baseSlider">Base Rotation:</label>
+      <input type="range" id="baseSlider"
+            min="-180" max="180" value="0">
+
+      <br><br>
+
+      <label for="shoulderSlider">Shoulder Rotation:</label>
+      <input type="range" id="shoulderSlider"
+            min="-90" max="90" value="0">
+
+      <br><br>
+
+      <label for="elbowSlider">Elbow Rotation:</label>
+      <input type="range" id="elbowSlider"
+            min="-120" max="120" value="0">
+
+      <br><br>
+
+      <label for="wristSlider">Wrist Rotation:</label>
+      <input type="range" id="wristSlider"
+            min="-180" max="180" value="0">
+
+      <br><br>
+
+      <label for="gripperSlider">Gripper:</label>
+      <input type="range" id="gripperSlider"
+            min="0" max="100" value="50">
+      
+      <br><br>
+
+      <button id="animationButton">Start Animation</button>
+    </div>
+  </div>
+
+  <!-- Vertex shader -->
+  <script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
+in vec3 aPosition;
+in vec3 aColor;
+
+uniform float uTime; //time in sec
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform mat4 uModelTransformationMatrix;
+
+out vec3 vColor;
+
+void main() {
+  gl_Position = uProjectionMatrix * uModelViewMatrix * uModelTransformationMatrix * vec4(aPosition,1.0);
+  vColor = aColor;
+}
+</script>
+  <!-- Fragment Shader -->
+  <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
+precision mediump float;
+in vec3 vColor;
+
+out vec4 fragColor;
+
+void main() {
+  fragColor = vec4(vColor,1.0);
+}
+</script>
+
+  <script src="primitives.js"></script>
+  <script src="transformations.js"></script>
+
+  <script>
+    function createShader(gl, type, source) {
+      let shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    }
+
+    function createProgram(gl, vsSource, fsSource) {
+      let vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+      let fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      let prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+      }
+      return prog;
+    }
+
+    // WebGL setup
+    const canvas = document.getElementById("glcanvas");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) alert("WebGL2 not supported");
+
+    let vertEditor = document.getElementById("vertEditor");
+    let fragEditor = document.getElementById("fragEditor");
+    vertEditor.value = document.getElementById("vertex-shader").textContent;
+    fragEditor.value = document.getElementById("fragment-shader").textContent;
+
+    let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM;
+    let cubeBuffers;
+
+    // Buffers
+    function createObjectBuffers(positions, colors, indices) {
+      let vbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+      let nbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
+      gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+
+      let ibo = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+      return {
+        vbo: vbo,
+        nbo: nbo,
+        ibo: ibo,
+        indexCount: indices.length
+      };
+    }
+
+    // Create buffers for cube
+    function initBuffers() {
+      cubeBuffers = createObjectBuffers(
+        cubePositions,
+        cubeColors,
+        cubeIndices
+      );
+    }
+
+    initBuffers();
+
+    function initShaderProgram() {
+      try {
+        program = createProgram(gl, vertEditor.value, fragEditor.value);
+        gl.useProgram(program);
+        posLoc = gl.getAttribLocation(program, "aPosition");
+        colorLoc = gl.getAttribLocation(program, "aColor");
+        timeLoc = gl.getUniformLocation(program, "uTime");
+        uMVM = gl.getUniformLocation(program, "uModelViewMatrix");
+        uPM = gl.getUniformLocation(program, "uProjectionMatrix");
+        uMTM = gl.getUniformLocation(program, "uModelTransformationMatrix");
+      } catch (e) { console.error(e); }
+    }
+    initShaderProgram();
+    vertEditor.onkeyup = initShaderProgram;
+    fragEditor.onkeyup = initShaderProgram;
+
+    // Mouse and keyboard interactions
+    let mouseDown = false, lastX, lastY, cubeRotX = 0, cubeRotY = 0;
+    let camX = 0, camY = 0, camZ = -6;
+
+    let baseAngle = 0;
+    let shoulderAngle = 0;
+    let elbowAngle = 0;
+    let wristAngle = 0;
+    let gripperAmount = 0.1;
+    let animationEnabled = false;
+
+    canvas.addEventListener('mousedown', e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
+    canvas.addEventListener('mouseup', () => mouseDown = false);
+    canvas.addEventListener('mousemove', e => {
+      if (!mouseDown) return;
+      let dx = e.clientX - lastX;
+      let dy = e.clientY - lastY;
+      cubeRotY += dx * 0.01;
+      cubeRotX += dy * 0.01;
+      lastX = e.clientX; lastY = e.clientY;
+    });
+
+    document.addEventListener('keydown', e => {
+      const step = 0.2;
+      switch (e.key) {
+        case 'ArrowUp': camY -= step; break;
+        case 'ArrowDown': camY += step; break;
+        case 'ArrowLeft': camX += step; break;
+        case 'ArrowRight': camX -= step; break;
+        case 'w': camZ += step; break;
+        case 's': camZ -= step; break;
+      }
+    });
+
+    // Robot arm controls
+    document.getElementById("baseSlider").addEventListener("input", function() {
+      baseAngle = this.value * Math.PI / 180;
+    });
+
+    document.getElementById("shoulderSlider").addEventListener("input", function() {
+      shoulderAngle = this.value * Math.PI / 180;
+    });
+
+    document.getElementById("elbowSlider").addEventListener("input", function() {
+      elbowAngle = this.value * Math.PI / 180;
+    });
+
+    document.getElementById("wristSlider").addEventListener("input", function() {
+      wristAngle = this.value * Math.PI / 180;
+    });
+
+    document.getElementById("gripperSlider").addEventListener("input", function() {
+      gripperAmount = this.value / 500;
+    });
+
+    document.getElementById("animationButton").addEventListener("click", function() {
+      animationEnabled = !animationEnabled;
+
+      if (animationEnabled) {
+        this.textContent = "Stop Animation";
+      } else {
+        this.textContent = "Start Animation";
+
+        // Return robot to current slider positions
+        baseAngle =
+          document.getElementById("baseSlider").value * Math.PI / 180;
+
+        shoulderAngle =
+          document.getElementById("shoulderSlider").value * Math.PI / 180;
+
+        elbowAngle =
+          document.getElementById("elbowSlider").value * Math.PI / 180;
+
+        wristAngle =
+          document.getElementById("wristSlider").value * Math.PI / 180;
+
+        gripperAmount =
+          document.getElementById("gripperSlider").value / 500;
+      }
+    });
+
+
+    // Projection setup
+    let fov = Math.PI / 4, aspect = canvas.width / canvas.height, zNear = 0.1, zFar = 100;
+
+    let orthoSize = 3.5;
+
+    // Orthographic projection
+    let projOrtho = matMul(
+    box2Cube(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, zNear, zFar),
+    flipZ()
+);
+    let proj = projOrtho;
+
+    let startTime = Date.now();
+
+    function drawObject(buffers, modelTransformationMatrix) {
+      gl.uniformMatrix4fv(uMTM, false, modelTransformationMatrix);
+
+      // Position buffer
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.vbo);
+      gl.enableVertexAttribArray(posLoc);
+      gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+      // Color buffer
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.nbo);
+      gl.enableVertexAttribArray(colorLoc);
+      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+      // Index buffer
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.ibo);
+
+      // Draw object
+      gl.drawElements(
+        gl.TRIANGLES,
+        buffers.indexCount,
+        gl.UNSIGNED_SHORT,
+        0
+      );
+    }
+
+    function render() {
+      gl.enable(gl.DEPTH_TEST);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      // Rotation matrices
+      let cx = Math.cos(cubeRotY), sx = Math.sin(cubeRotY);
+      let cy = Math.cos(cubeRotX), sy = Math.sin(cubeRotX);
+
+      let rotX = [
+        1, 0, 0, 0,
+        0, cy, sy, 0,
+        0, -sy, cy, 0,
+        0, 0, 0, 1
+      ];
+
+      let rotY = [
+        cx, 0, -sx, 0,
+        0, 1, 0, 0,
+        sx, 0, cx, 0,
+        0, 0, 0, 1
+      ];
+
+      let objectRotation = multiplyMat4(rotY, rotX);
+
+      // Camera matrix
+      let modelViewMatrix = mat4Identity();
+
+      modelViewMatrix = mat4Translate(
+        modelViewMatrix,
+        [camX, camY, camZ]
+      );
+
+      // Delta time in ms
+      let deltaTime = Date.now() - startTime;
+      let time = deltaTime / 1000.0;
+
+      if (animationEnabled) {
+        baseAngle = Math.sin(time * 0.5) * 0.8;
+        shoulderAngle = Math.sin(time) * 0.6;
+        elbowAngle = Math.sin(time * 1.2) * 0.8;
+        wristAngle = Math.sin(time * 1.5) * 0.5;
+
+        gripperAmount = 0.1 + 0.08 * (0.5 + 0.5 * Math.sin(time * 2.0));
+      }
+
+      // Set uniforms shared by all objects
+      gl.uniform1f(timeLoc, time);
+      gl.uniformMatrix4fv(uPM, false, proj);
+      gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
+
+
+      // ROBOT ARM HIERARCHY
+      // LEVEL 1: BASE
+
+      let baseJointMatrix = mat4Identity();
+
+      // Move entire robot down to center it in the display
+      baseJointMatrix = mat4Translate(
+        baseJointMatrix,
+        [0, -2.0, 0]
+      );
+
+      // Apply mouse rotation to the entire robot
+      baseJointMatrix = multiplyMat4(
+        baseJointMatrix,
+        objectRotation
+      );
+
+      // Rotate base using slider
+      baseJointMatrix = mat4RotateY(
+        baseJointMatrix,
+        baseAngle
+      );
+
+      // Matrix used only for drawing the base
+      let baseDrawMatrix = mat4Scale(
+        baseJointMatrix,
+        [0.8, 0.3, 0.8]
+      );
+
+      drawObject(cubeBuffers, baseDrawMatrix);
+
+
+      // LEVEL 2: LOWER ARM
+
+      // Start with the transformation of the base
+      let lowerArmJointMatrix = new Float32Array(baseJointMatrix);
+
+      // Move the joint to the top of the base
+      lowerArmJointMatrix = mat4Translate(
+        lowerArmJointMatrix,
+        [0, 0.3, 0]
+      );
+
+      // Rotate lower arm at the shoulder
+      lowerArmJointMatrix = mat4RotateX(
+        lowerArmJointMatrix,
+        shoulderAngle
+      );
+
+      // Move from the shoulder joint to the center of the lower arm
+      let lowerArmDrawMatrix = mat4Translate(
+        lowerArmJointMatrix,
+        [0, 1.0, 0]
+      );
+
+      // Scale the cube into a long arm segment
+      lowerArmDrawMatrix = mat4Scale(
+        lowerArmDrawMatrix,
+        [0.25, 1.0, 0.25]
+      );
+
+      drawObject(cubeBuffers, lowerArmDrawMatrix);
+
+
+      // LEVEL 3: UPPER ARM
+
+      // Start with the lower arm joint transformation
+      let upperArmJointMatrix = new Float32Array(lowerArmJointMatrix);
+
+      // Move to the top/end of the lower arm
+      upperArmJointMatrix = mat4Translate(
+        upperArmJointMatrix,
+        [0, 2.0, 0]
+      );
+
+      // Rotate upper arm at the elbow
+      upperArmJointMatrix = mat4RotateX(
+        upperArmJointMatrix,
+        elbowAngle
+      );
+
+      // Move from elbow joint to center of upper arm
+      let upperArmDrawMatrix = mat4Translate(
+        upperArmJointMatrix,
+        [0, 0.8, 0]
+      );
+
+      // Scale cube into upper arm segment
+      upperArmDrawMatrix = mat4Scale(
+        upperArmDrawMatrix,
+        [0.22, 0.8, 0.22]
+      );
+
+      drawObject(cubeBuffers, upperArmDrawMatrix);
+
+
+      // LEVEL 4: HAND
+
+      // Start with the upper arm joint transformation
+      let handJointMatrix = new Float32Array(upperArmJointMatrix);
+
+      // Move to the top/end of the upper arm
+      handJointMatrix = mat4Translate(
+        handJointMatrix,
+        [0, 1.6, 0]
+      );
+
+      // Rotate hand at the wrist
+      handJointMatrix = mat4RotateX(
+        handJointMatrix,
+        wristAngle
+      );
+
+      // Move from wrist joint to center of hand
+      let handDrawMatrix = mat4Translate(
+        handJointMatrix,
+        [0, 0.3, 0]
+      );
+
+      // Scale cube into a small hand
+      handDrawMatrix = mat4Scale(
+        handDrawMatrix,
+        [0.4, 0.3, 0.4]
+      );
+
+      drawObject(cubeBuffers, handDrawMatrix);
+
+
+      // GRIPPER MECHANISM
+      // LEFT FINGER
+
+      let leftFingerMatrix = new Float32Array(handJointMatrix);
+
+      // Move to top of hand
+      leftFingerMatrix = mat4Translate(
+        leftFingerMatrix,
+        [-0.1 - gripperAmount, 0.8, 0]
+      );
+
+      // Make finger long and thin
+      leftFingerMatrix = mat4Scale(
+        leftFingerMatrix,
+        [0.12, 0.5, 0.12]
+      );
+
+      drawObject(cubeBuffers, leftFingerMatrix);
+
+
+      // RIGHT FINGER
+
+      let rightFingerMatrix = new Float32Array(handJointMatrix);
+
+      // Move to top of hand
+      rightFingerMatrix = mat4Translate(
+        rightFingerMatrix,
+        [0.1 + gripperAmount, 0.8, 0]
+      );
+
+      // Make finger long and thin
+      rightFingerMatrix = mat4Scale(
+        rightFingerMatrix,
+        [0.12, 0.5, 0.12]
+      );
+
+      drawObject(cubeBuffers, rightFingerMatrix);
+    }
+
+    // Initialize when page loads
+    window.onload = function () {
+      setInterval(render, 30);
+    }
+
+  </script>
+</body>
+
+</html>
